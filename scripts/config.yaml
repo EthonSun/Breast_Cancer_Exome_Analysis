@@ -1,0 +1,8 @@
+# ~/course/2503/project/scripts/config.yaml
+sra_dir: "/data/data/sra"
+untrimmed_dir: "/data/data/untrimmed"
+trimmed_dir: "/data/data/trimmed"
+ref: "/data/data/ref/Homo_sapiens_assembly38.fasta"
+result_dir: "/data/results"
+fastqc_raw_dir: "/data/results/fastqc_untrimmed"
+fastqc_trimmed_dir: "/data/results/fastqc_trimmed"

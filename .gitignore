@@ -1,0 +1,24 @@
+# 忽略所有大型数据文件和临时文件
+data/sra/
+data/trimmed/
+data/untrimmed/
+data/trimmed_fastq/ # 如果这些目录也用于存放中间结果
+data/untrimmed_fastq/ # 同上
+
+results/            # 忽略所有最终和中间结果文件
+logs/               # 忽略所有日志文件
+
+# Snakemake 临时文件和元数据
+.snakemake/
+
+# 忽略Python相关缓存
+__pycache__/
+*.pyc
+
+# 忽略Docker构建上下文的临时文件
+*.tar
+*.zip
+
+# 忽略操作系统生成的文件
+.DS_Store
+Thumbs.db

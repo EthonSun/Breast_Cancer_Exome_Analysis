@@ -1,0 +1,125 @@
+import os
+import glob
+
+configfile: "config.yaml"
+
+# 获取样本列表（使用os.path兼容路径）
+SAMPLES = [os.path.basename(f).replace('.sra','') 
+          for f in glob.glob(os.path.join(config['sra_dir'], "*", "*.sra"))]
+
+rule all:
+    input:
+        expand(os.path.join(config['result_dir'], "vcf/{sample}_final.vcf"), sample=SAMPLES)
+
+# 1. SRA转fastq
+rule sra_to_fastq:
+    input:
+        sra = os.path.join(config['sra_dir'], "{sample}", "{sample}.sra")
+    output:
+        r1 = os.path.join(config['untrimmed_dir'], "{sample}_1.fastq.gz"),
+        r2 = os.path.join(config['untrimmed_dir'], "{sample}_2.fastq.gz")
+    log:
+        log = os.path.join("logs/sra_to_fastq", "{sample}.log")
+    params:
+        outdir = config['untrimmed_dir']
+    shell:
+        """
+        mkdir -p {params.outdir}
+        fasterq-dump {input.sra} -O {params.outdir} &> {log.log}
+        gzip {params.outdir}/{wildcards.sample}_1.fastq
+        gzip {params.outdir}/{wildcards.sample}_2.fastq
+        """
+
+# 2. FastQC原始数据
+rule fastqc_raw:
+    input:
+        r1 = rules.sra_to_fastq.output.r1,
+        r2 = rules.sra_to_fastq.output.r2
+    output:
+        html1 = os.path.join(config['fastqc_raw_dir'], "{sample}_1_fastqc.html"),
+        html2 = os.path.join(config['fastqc_raw_dir'], "{sample}_2_fastqc.html"),
+        zip1 = os.path.join(config['fastqc_raw_dir'], "{sample}_1_fastqc.zip"),
+        zip2 = os.path.join(config['fastqc_raw_dir'], "{sample}_2_fastqc.zip")
+    log:
+        log = os.path.join("logs/fastqc_raw", "{sample}.log")
+    params:
+        outdir = config['fastqc_raw_dir']
+    shell:
+        """
+        mkdir -p {params.outdir} logs/fastqc_raw
+        fastqc {input.r1} {input.r2} -o {params.outdir} &> {log.log}
+        """
+
+# 3. Trimming
+rule trim:
+    input:
+        r1 = rules.fastqc_raw.input.r1,
+        r2 = rules.fastqc_raw.input.r2
+    output:
+        r1_paired = os.path.join(config['trimmed_dir'], "{sample}_1_paired.fastq.gz"),
+        r1_unpaired = os.path.join(config['trimmed_dir'], "{sample}_1_unpaired.fastq.gz"),
+        r2_paired = os.path.join(config['trimmed_dir'], "{sample}_2_paired.fastq.gz"),
+        r2_unpaired = os.path.join(config['trimmed_dir'], "{sample}_2_unpaired.fastq.gz")
+    log:
+        log = os.path.join("logs/trim", "{sample}.log")
+    params:
+        outdir = config['trimmed_dir']
+    threads: 2
+    shell:
+        """
+        mkdir -p {params.outdir}
+        trimmomatic PE -threads {threads} {input.r1} {input.r2} \
+        {output.r1_paired} {output.r1_unpaired} \
+        {output.r2_paired} {output.r2_unpaired} \
+        SLIDINGWINDOW:4:20 MINLEN:20 &> {log.log}
+        """
+
+# 4. BWA比对
+rule bwa_mem:
+    input:
+        r1 = rules.trim.output.r1_paired,
+        r2 = rules.trim.output.r2_paired,
+        ref = config['ref']
+    output:
+        sam = os.path.join(config['result_dir'], "sam/{sample}.sam")
+    log:
+        main = os.path.join("logs", "{sample}.bwa.log")
+    threads: 2
+    shell:
+        """
+        bwa mem -t {threads} -R '@RG\\tID:{wildcards.sample}\\tSM:{wildcards.sample}\\tPL:Illumina' \
+        {input.ref} {input.r1} {input.r2} > {output.sam} 2> {log.main}
+        """
+
+# 5. SAM转BAM
+rule sam_to_bam:
+    input:
+        rules.bwa_mem.output.sam
+    output:
+        bam = os.path.join(config['result_dir'], "bam/{sample}.sorted.bam"),
+        bai = os.path.join(config['result_dir'], "bam/{sample}.sorted.bam.bai")
+    log:
+        main = os.path.join("logs", "{sample}.samtools.log")
+    threads: 2
+    shell:
+        """
+        samtools view -S -b {input} 2>> {log.main} | \
+        samtools sort -@ {threads} -o {output.bam} 2>> {log.main} && \
+        samtools index {output.bam} 2>> {log.main}
+        """
+
+# 6. 变异检测
+rule call_variants:
+    input:
+        bam = rules.sam_to_bam.output.bam,
+        ref = config['ref']
+    output:
+        vcf = os.path.join(config['result_dir'], "vcf/{sample}_final.vcf")
+    log:
+        main = os.path.join("logs", "{sample}.bcftools.log")
+    shell:
+        """
+        bcftools mpileup -O b -f {input.ref} {input.bam} 2>> {log.main} | \
+        bcftools call --ploidy 1 -m -v - 2>> {log.main} | \
+        vcfutils.pl varFilter > {output.vcf} 2>> {log.main}
+        """
